@@ -6,7 +6,8 @@
   "scripts": {
     "login": "node scripts/login.js",
     "test-local": "node scripts/test-local.js",
-    "test-mail": "node scripts/test-mail.js"
+    "test-mail": "node scripts/test-mail.js",
+    "check": "node scripts/check-and-notify.js"
   },
   "dependencies": {
     "@sparticuz/chromium": "^131.0.1",

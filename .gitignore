@@ -13,6 +13,9 @@ cookies.json
 # 브라우저 프로필 (로그인 세션)
 .browser-profile/
 
+# 처리된 게시물 기록
+.processed-posts.json
+
 # Vercel
 .vercel
 
