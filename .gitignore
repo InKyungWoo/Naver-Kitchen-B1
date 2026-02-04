@@ -1,0 +1,29 @@
+# 의존성
+node_modules/
+
+# 환경변수 (민감 정보)
+.env
+.env.local
+.env.*.local
+.env.cookies
+
+# 쿠키 파일 (민감 정보)
+cookies.json
+
+# 브라우저 프로필 (로그인 세션)
+.browser-profile/
+
+# Vercel
+.vercel
+
+# 로그
+*.log
+npm-debug.log*
+
+# OS 파일
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
