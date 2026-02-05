@@ -137,23 +137,21 @@ function checkMailForBandLinks() {
     const bandLinks = [];
 
     imap.once("ready", () => {
-      imap.openBox("INBOX", false, (err, box) => {
+      // Kitchen B1 폴더 열기
+      imap.openBox("Kitchen B1", false, (err, box) => {
         if (err) {
           imap.end();
           return reject(err);
         }
 
-        // 최근 24시간 내 읽지 않은 밴드 알림 메일 검색
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-
-        imap.search(["UNSEEN", ["SINCE", yesterday], ["OR", ["FROM", "band"], ["SUBJECT", "밴드"]]], (err, results) => {
+        // 읽지 않은 BAND 메일 검색
+        imap.search(["UNSEEN", ["FROM", "BAND"]], (err, results) => {
           if (err || !results || results.length === 0) {
             imap.end();
             return resolve([]);
           }
 
-          console.log(`   📧 읽지 않은 밴드 메일 ${results.length}개`);
+          console.log(`   📧 새 밴드 메일 ${results.length}개 발견`);
 
           const fetch = imap.fetch(results, { bodies: "", markSeen: true });
           let pending = results.length;
@@ -167,7 +165,7 @@ function checkMailForBandLinks() {
                   return;
                 }
 
-                // 메일 본문에서 밴드 링크 추출 (www.band.us 포함)
+                // 메일 본문에서 밴드 링크 추출
                 const text = (parsed.text || "") + (parsed.html || "");
                 const linkMatches = text.match(/https?:\/\/(www\.)?band\.us\/band\/\d+\/post\/\d+/g);
 
@@ -190,10 +188,7 @@ function checkMailForBandLinks() {
             reject(err);
           });
 
-          fetch.once("end", () => {
-            // simpleParser가 비동기라서 여기서 바로 end 하면 안됨
-            // pending 카운트로 처리
-          });
+          fetch.once("end", () => {});
         });
       });
     });
@@ -230,7 +225,7 @@ async function scrapePost(browser, url) {
       const timeEl = document.querySelector('.postTime, .time, time, [class*="time"], .uTime, .createTime');
       const time = timeEl?.textContent?.trim() || "";
 
-      // 본문 텍스트 - 여러 선택자 시도
+      // 본문 텍스트 - 여러 선택자 시도 (innerText로 줄바꿈 유지)
       let content = "";
       const contentSelectors = [
         ".postBody .txt",
@@ -244,8 +239,8 @@ async function scrapePost(browser, url) {
       ];
       for (const selector of contentSelectors) {
         const el = document.querySelector(selector);
-        if (el && el.textContent.trim()) {
-          content = el.textContent.trim();
+        if (el && el.innerText?.trim()) {
+          content = el.innerText.trim();
           break;
         }
       }
@@ -303,37 +298,53 @@ async function scrapePost(browser, url) {
  * 슬랙으로 전송
  */
 async function sendToSlack(post) {
+  // 시간에서 점심/저녁 판단
+  const timeStr = post.time || "";
+  let mealType = "메뉴";
+  if (timeStr.includes("오후")) {
+    const hourMatch = timeStr.match(/오후\s*(\d+)/);
+    if (hourMatch) {
+      const hour = parseInt(hourMatch[1]);
+      mealType = hour >= 5 ? "저녁 메뉴" : "점심 메뉴";
+    }
+  } else {
+    mealType = "점심 메뉴";
+  }
+
+  // 날짜 추출 (예: "2월 4일")
+  const dateMatch = timeStr.match(/(\d+)월\s*(\d+)일/);
+  const dateStr = dateMatch ? `${dateMatch[1]}월 ${dateMatch[2]}일` : "오늘";
+
+  // 본문 정리
+  let content = post.content || "";
+  if (content.length > 2000) {
+    content = content.substring(0, 2000) + "...";
+  }
+
   const blocks = [
     {
       type: "header",
       text: {
         type: "plain_text",
-        text: "🍽️ 구내식당 메뉴 알림",
+        text: `😋 ${dateStr} ${mealType}`,
         emoji: true,
       },
-    },
-    {
-      type: "section",
-      fields: [
-        { type: "mrkdwn", text: `*작성자:*\n${post.author}` },
-        { type: "mrkdwn", text: `*시간:*\n${post.time || "방금 전"}` },
-      ],
     },
   ];
 
   // 본문 내용
-  if (post.content) {
+  if (content) {
     blocks.push({
       type: "section",
       text: {
         type: "mrkdwn",
-        text: post.content.length > 2000 ? post.content.substring(0, 2000) + "..." : post.content,
+        text: content,
       },
     });
   }
 
-  // 이미지들 (최대 6개)
-  const imagesToShow = post.images.slice(0, 6);
+  // 이미지들 (최대 3개)
+  const imagesToShow = post.images.slice(0, 3);
   console.log(`   🖼️ 이미지 ${imagesToShow.length}장 첨부`);
   imagesToShow.forEach((imageUrl, index) => {
     blocks.push({
@@ -358,7 +369,7 @@ async function sendToSlack(post) {
 
   const payload = {
     blocks,
-    text: `[구내식당] ${post.content?.substring(0, 100) || "새 메뉴가 올라왔습니다"}...`,
+    text: `[${dateStr} ${mealType}] ${post.content?.substring(0, 100) || "새 메뉴가 올라왔습니다"}...`,
   };
 
   const response = await fetch(SLACK_WEBHOOK_URL, {

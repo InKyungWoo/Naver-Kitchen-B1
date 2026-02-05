@@ -4,10 +4,10 @@
   "description": "네이버 밴드 → 슬랙 연동 (B1 Kitchen)",
   "main": "index.js",
   "scripts": {
-    "login": "node scripts/login.js",
-    "test-local": "node scripts/test-local.js",
-    "test-mail": "node scripts/test-mail.js",
-    "check": "node scripts/check-and-notify.js"
+    "login": "node src/login.js",
+    "check": "node src/check-and-notify.js",
+    "test-local": "node tests/test-local.js",
+    "test-mail": "node tests/test-mail.js"
   },
   "dependencies": {
     "@sparticuz/chromium": "^131.0.1",
