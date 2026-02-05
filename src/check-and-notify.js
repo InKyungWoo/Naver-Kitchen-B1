@@ -12,6 +12,7 @@
 const puppeteer = require("puppeteer");
 const Imap = require("imap");
 const { simpleParser } = require("mailparser");
+const nodemailer = require("nodemailer");
 const fs = require("fs");
 const path = require("path");
 require("dotenv").config();
@@ -20,6 +21,7 @@ const IMAP_HOST = process.env.IMAP_HOST;
 const IMAP_USER = process.env.IMAP_USER;
 const IMAP_PASS = process.env.IMAP_PASS;
 const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
+const ALERT_EMAIL = process.env.ALERT_EMAIL; // 에러 알림 받을 이메일
 
 // 브라우저 프로필 경로
 const USER_DATA_DIR = path.join(__dirname, "..", ".browser-profile");
@@ -414,5 +416,39 @@ function saveProcessedPosts(posts) {
   fs.writeFileSync(PROCESSED_FILE, JSON.stringify(recentPosts, null, 2));
 }
 
+/**
+ * 에러 알림 이메일 전송
+ */
+async function sendErrorAlert(errorMessage) {
+  if (!ALERT_EMAIL) return;
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: IMAP_HOST.replace("imap.", "smtp."), // imap → smtp
+      port: 587,
+      secure: false,
+      auth: {
+        user: IMAP_USER,
+        pass: IMAP_PASS,
+      },
+    });
+
+    await transporter.sendMail({
+      from: IMAP_USER,
+      to: ALERT_EMAIL,
+      subject: "⚠️ [Kitchen Bot] 오류 발생",
+      text: `Kitchen Bot 실행 중 오류가 발생했습니다.\n\n시간: ${new Date().toLocaleString("ko-KR")}\n오류: ${errorMessage}\n\nnpm run login 으로 재로그인이 필요할 수 있습니다.`,
+    });
+
+    console.log("📧 에러 알림 메일 전송됨");
+  } catch (e) {
+    console.error("❌ 에러 알림 메일 전송 실패:", e.message);
+  }
+}
+
 // 실행
-main();
+main().catch(async (err) => {
+  console.error("❌ 치명적 오류:", err.message);
+  await sendErrorAlert(err.message);
+  process.exit(1);
+});

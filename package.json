@@ -11,13 +11,14 @@
   },
   "dependencies": {
     "@sparticuz/chromium": "^131.0.1",
-    "puppeteer-core": "^24.0.0",
     "imap": "^0.8.19",
-    "mailparser": "^3.7.1"
+    "mailparser": "^3.7.1",
+    "nodemailer": "^8.0.0",
+    "puppeteer-core": "^24.0.0"
   },
   "devDependencies": {
-    "puppeteer": "^24.0.0",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "puppeteer": "^24.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
