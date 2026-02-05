@@ -16,6 +16,7 @@ node_modules/
 .vercel
 
 # 로그
+logs/
 *.log
 npm-debug.log*
 
