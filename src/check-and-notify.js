@@ -94,7 +94,7 @@ async function main() {
 
       const post = await scrapePost(browser, link);
 
-      if (post) {
+      if (post && post.content && post.content.length > 10) {
         // 슬랙 전송
         console.log("📤 슬랙으로 전송 중...");
         await sendToSlack(post);
@@ -107,7 +107,8 @@ async function main() {
           saveProcessedPosts(processedPosts);
         }
       } else {
-        console.log("⚠️ 게시물 스크래핑 실패");
+        console.log("⚠️ 게시물 스크래핑 실패 (내용 없음 또는 로그인 필요)");
+        await sendErrorAlert("스크래핑 실패: 내용이 비어있거나 로그인이 필요합니다. npm run login 실행 필요.");
       }
     } finally {
       await browser.close();
@@ -325,11 +326,10 @@ async function sendToSlack(post) {
 
   const blocks = [
     {
-      type: "header",
+      type: "section",
       text: {
-        type: "plain_text",
-        text: `😋 ${dateStr} ${mealType}`,
-        emoji: true,
+        type: "mrkdwn",
+        text: `*😋 ${dateStr} ${mealType}*`,
       },
     },
   ];
