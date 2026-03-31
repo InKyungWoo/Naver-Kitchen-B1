@@ -111,6 +111,9 @@ async function main() {
         await sendErrorAlert("스크래핑 실패: 내용이 비어있거나 로그인이 필요합니다. npm run login 실행 필요.");
       }
     } finally {
+      // 모든 페이지 닫기 (탭 누적 방지)
+      const pages = await browser.pages();
+      await Promise.all(pages.map((p) => p.close()));
       await browser.close();
       console.log("\n🔒 브라우저 종료");
     }

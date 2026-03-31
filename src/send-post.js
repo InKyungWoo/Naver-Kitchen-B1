@@ -149,6 +149,9 @@ async function sendPost() {
   } catch (error) {
     console.error("❌ 에러:", error.message);
   } finally {
+    // 모든 페이지 닫기 (탭 누적 방지)
+    const pages = await browser.pages();
+    await Promise.all(pages.map((p) => p.close()));
     await browser.close();
     console.log("🔒 브라우저 종료");
   }

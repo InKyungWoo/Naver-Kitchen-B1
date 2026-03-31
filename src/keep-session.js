@@ -17,7 +17,7 @@ const ALERT_EMAIL = process.env.ALERT_EMAIL;
 
 async function sendErrorAlert(message) {
   if (!ALERT_EMAIL) return;
-  
+
   try {
     const transporter = nodemailer.createTransport({
       host: IMAP_HOST.replace("imap.", "smtp."),
@@ -32,7 +32,7 @@ async function sendErrorAlert(message) {
       subject: "⚠️ [Kitchen Bot] 세션 만료",
       text: `세션이 만료되었습니다.\n\n시간: ${new Date().toLocaleString("ko-KR")}\n내용: ${message}\n\nnpm run login 으로 재로그인이 필요합니다.`,
     });
-    
+
     console.log("📧 알림 메일 전송됨");
   } catch (e) {
     console.error("❌ 메일 전송 실패:", e.message);
@@ -50,7 +50,7 @@ async function keepSession() {
   try {
     const page = await browser.newPage();
     await page.goto(BAND_URL, { waitUntil: "networkidle2", timeout: 30000 });
-    
+
     // 로그인 상태 확인
     if (page.url().includes("auth.band.us") || page.url().includes("/login")) {
       console.log("⚠️ 로그인 풀림 - npm run login 필요");
@@ -62,6 +62,9 @@ async function keepSession() {
     console.error("❌ 에러:", error.message);
     await sendErrorAlert(error.message);
   } finally {
+    // 모든 페이지 닫기 (탭 누적 방지)
+    const pages = await browser.pages();
+    await Promise.all(pages.map((p) => p.close()));
     await browser.close();
   }
 }
