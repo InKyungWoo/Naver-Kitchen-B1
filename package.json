@@ -6,6 +6,7 @@
   "scripts": {
     "login": "node src/login.js",
     "check": "node src/check-and-notify.js",
+    "check-direct": "node src/check-direct.js",
     "send": "node src/send-post.js",
     "keep-session": "node src/keep-session.js",
     "test-local": "node tests/test-local.js",
