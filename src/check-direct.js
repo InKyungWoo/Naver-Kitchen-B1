@@ -14,6 +14,7 @@ const puppeteer = require("puppeteer");
 const nodemailer = require("nodemailer");
 const fs = require("fs");
 const path = require("path");
+const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./browser-lock");
 require("dotenv").config();
 
 const BAND_URL = process.env.BAND_URL;
@@ -42,13 +43,20 @@ async function main() {
     process.exit(1);
   }
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    defaultViewport: { width: 1280, height: 800 },
-    userDataDir: USER_DATA_DIR,
-  });
+  const lockFd = await acquireBrowserProfileLock({ waitMs: 60000 });
+  if (lockFd === null) {
+    console.log("⏭️ 브라우저 프로필이 다른 작업에 사용 중입니다. 이번 실행은 건너뜁니다.");
+    return;
+  }
 
+  let browser;
   try {
+    browser = await puppeteer.launch({
+      headless: true,
+      defaultViewport: { width: 1280, height: 800 },
+      userDataDir: USER_DATA_DIR,
+    });
+
     console.log("🌐 밴드 피드 접속 중...");
     const page = await browser.newPage();
 
@@ -140,10 +148,13 @@ async function main() {
     await sendErrorAlert(`밴드 직접 체크 오류: ${error.message}`);
     throw error;
   } finally {
-    const pages = await browser.pages();
-    await Promise.all(pages.map((p) => p.close()));
-    await browser.close();
-    console.log("🔒 브라우저 종료");
+    if (browser) {
+      const pages = await browser.pages();
+      await Promise.all(pages.map((p) => p.close()));
+      await browser.close();
+      console.log("🔒 브라우저 종료");
+    }
+    releaseBrowserProfileLock(lockFd);
   }
 }
 

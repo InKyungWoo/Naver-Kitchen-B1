@@ -8,6 +8,7 @@
 
 const puppeteer = require("puppeteer");
 const path = require("path");
+const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./browser-lock");
 require("dotenv").config();
 
 // 브라우저 프로필 저장 경로
@@ -30,15 +31,21 @@ async function login() {
   console.log(`📁 프로필 저장 위치: ${USER_DATA_DIR}`);
   console.log("");
 
-  const browser = await puppeteer.launch({
-    headless: false,
-    defaultViewport: { width: 1280, height: 800 },
-    userDataDir: USER_DATA_DIR, // 브라우저 프로필 저장
-  });
+  const lockFd = await acquireBrowserProfileLock({ waitMs: 600000 });
+  if (lockFd === null) {
+    console.error("❌ 자동 작업이 프로필을 사용 중입니다. 잠시 후 다시 시도하세요.");
+    process.exit(1);
+  }
 
-  const page = await browser.newPage();
-
+  let browser;
   try {
+    browser = await puppeteer.launch({
+      headless: false,
+      defaultViewport: { width: 1280, height: 800 },
+      userDataDir: USER_DATA_DIR, // 브라우저 프로필 저장
+    });
+
+    const page = await browser.newPage();
     // 밴드 로그인 페이지로 이동
     console.log("📍 밴드 로그인 페이지 이동...");
     await page.goto("https://auth.band.us/login_page", {
@@ -64,8 +71,11 @@ async function login() {
     console.error("❌ 로그인 실패:", error.message);
     console.error(error);
   } finally {
-    console.log("\n🔒 브라우저 종료...");
-    await browser.close();
+    if (browser) {
+      console.log("\n🔒 브라우저 종료...");
+      await browser.close();
+    }
+    releaseBrowserProfileLock(lockFd);
   }
 }
 

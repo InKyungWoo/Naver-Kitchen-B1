@@ -15,6 +15,7 @@ const { simpleParser } = require("mailparser");
 const nodemailer = require("nodemailer");
 const fs = require("fs");
 const path = require("path");
+const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./browser-lock");
 require("dotenv").config();
 
 const IMAP_HOST = process.env.IMAP_HOST;
@@ -80,15 +81,22 @@ async function main() {
     console.log(`🆕 최신 게시물 1개 처리 (총 ${newLinks.length}개 중)`);
     console.log("");
 
-    // 2단계: 브라우저로 스크래핑
-    console.log("🌐 브라우저 시작...");
-    const browser = await puppeteer.launch({
-      headless: true, // 백그라운드 실행
-      defaultViewport: { width: 1280, height: 800 },
-      userDataDir: USER_DATA_DIR,
-    });
+    // 2단계: 브라우저로 스크래핑 (다른 cron과 동시 실행 시 프로필 손상 방지)
+    const lockFd = await acquireBrowserProfileLock({ waitMs: 120000 });
+    if (lockFd === null) {
+      console.log("⏭️ 브라우저 프로필이 다른 작업에 사용 중입니다. 이번 실행은 건너뜁니다.");
+      return;
+    }
 
+    console.log("🌐 브라우저 시작...");
+    let browser;
     try {
+      browser = await puppeteer.launch({
+        headless: true, // 백그라운드 실행
+        defaultViewport: { width: 1280, height: 800 },
+        userDataDir: USER_DATA_DIR,
+      });
+
       const link = latestLink;
       console.log(`\n📍 게시물 스크래핑: ${link}`);
 
@@ -111,11 +119,13 @@ async function main() {
         await sendErrorAlert("스크래핑 실패: 내용이 비어있거나 로그인이 필요합니다. npm run login 실행 필요.");
       }
     } finally {
-      // 모든 페이지 닫기 (탭 누적 방지)
-      const pages = await browser.pages();
-      await Promise.all(pages.map((p) => p.close()));
-      await browser.close();
-      console.log("\n🔒 브라우저 종료");
+      if (browser) {
+        const pages = await browser.pages();
+        await Promise.all(pages.map((p) => p.close()));
+        await browser.close();
+        console.log("\n🔒 브라우저 종료");
+      }
+      releaseBrowserProfileLock(lockFd);
     }
 
     console.log("\n🎉 모든 작업 완료!");

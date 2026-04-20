@@ -7,6 +7,7 @@
 
 const puppeteer = require("puppeteer");
 const path = require("path");
+const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./browser-lock");
 require("dotenv").config();
 
 const USER_DATA_DIR = path.join(__dirname, "..", ".browser-profile");
@@ -22,13 +23,19 @@ if (!url) {
 }
 
 async function sendPost() {
-  console.log("🌐 브라우저 시작...");
-  const browser = await puppeteer.launch({
-    headless: "new",
-    userDataDir: USER_DATA_DIR,
-  });
+  const lockFd = await acquireBrowserProfileLock({ waitMs: 300000 });
+  if (lockFd === null) {
+    console.log("❌ 브라우저 프로필을 다른 작업이 오래 사용 중입니다. 잠시 후 다시 시도하세요.");
+    process.exit(1);
+  }
 
+  console.log("🌐 브라우저 시작...");
+  let browser;
   try {
+    browser = await puppeteer.launch({
+      headless: "new",
+      userDataDir: USER_DATA_DIR,
+    });
     const page = await browser.newPage();
     console.log(`📍 페이지 로딩: ${url}`);
     await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
@@ -149,11 +156,13 @@ async function sendPost() {
   } catch (error) {
     console.error("❌ 에러:", error.message);
   } finally {
-    // 모든 페이지 닫기 (탭 누적 방지)
-    const pages = await browser.pages();
-    await Promise.all(pages.map((p) => p.close()));
-    await browser.close();
-    console.log("🔒 브라우저 종료");
+    if (browser) {
+      const pages = await browser.pages();
+      await Promise.all(pages.map((p) => p.close()));
+      await browser.close();
+      console.log("🔒 브라우저 종료");
+    }
+    releaseBrowserProfileLock(lockFd);
   }
 }
 
