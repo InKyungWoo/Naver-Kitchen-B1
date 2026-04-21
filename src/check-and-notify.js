@@ -322,6 +322,9 @@ async function scrapePost(browser, url) {
  * 슬랙으로 전송
  */
 async function sendToSlack(post) {
+  const contentRaw = post.content || "";
+  const isMenuNotice = /\[\s*COURSE\s*\d+\s*\/\s*\d+\s*\]/i.test(contentRaw);
+
   // 시간에서 점심/저녁 판단
   const timeStr = post.time || "";
   let mealType = "메뉴";
@@ -340,20 +343,21 @@ async function sendToSlack(post) {
   const dateStr = dateMatch ? `${dateMatch[1]}월 ${dateMatch[2]}일` : "오늘";
 
   // 본문 정리
-  let content = post.content || "";
+  let content = contentRaw;
   if (content.length > 2000) {
     content = content.substring(0, 2000) + "...";
   }
 
-  const blocks = [
-    {
+  const blocks = [];
+  if (isMenuNotice) {
+    blocks.push({
       type: "section",
       text: {
         type: "mrkdwn",
         text: `*😋 ${dateStr} ${mealType}*`,
       },
-    },
-  ];
+    });
+  }
 
   // 본문 내용
   if (content) {
@@ -392,7 +396,9 @@ async function sendToSlack(post) {
 
   const payload = {
     blocks,
-    text: `[${dateStr} ${mealType}] ${post.content?.substring(0, 100) || "새 메뉴가 올라왔습니다"}...`,
+    text: isMenuNotice
+      ? `[${dateStr} ${mealType}] ${post.content?.substring(0, 100) || "새 메뉴가 올라왔습니다"}...`
+      : `${post.content?.substring(0, 100) || "새 게시물이 올라왔습니다"}...`,
   };
 
   const response = await fetch(SLACK_WEBHOOK_URL, {

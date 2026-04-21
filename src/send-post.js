@@ -99,6 +99,8 @@ async function sendPost() {
       return;
     }
 
+    const isMenuNotice = /\[\s*COURSE\s*\d+\s*\/\s*\d+\s*\]/i.test(post.content || "");
+
     // 시간에서 점심/저녁 판단
     const timeStr = post.time || "";
     let mealType = "메뉴";
@@ -116,16 +118,17 @@ async function sendPost() {
     const dateStr = dateMatch ? `${dateMatch[1]}월 ${dateMatch[2]}일` : "오늘";
 
     // 슬랙 블록 생성
-    const blocks = [
-      {
+    const blocks = [];
+    if (isMenuNotice) {
+      blocks.push({
         type: "section",
         text: { type: "mrkdwn", text: `*😋 ${dateStr} ${mealType}*` },
-      },
-      {
-        type: "section",
-        text: { type: "mrkdwn", text: post.content.substring(0, 2000) },
-      },
-    ];
+      });
+    }
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: post.content.substring(0, 2000) },
+    });
 
     post.images.slice(0, 3).forEach((img, i) => {
       blocks.push({
@@ -145,7 +148,10 @@ async function sendPost() {
     const res = await fetch(SLACK_WEBHOOK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ blocks, text: `[${dateStr} ${mealType}]` }),
+      body: JSON.stringify({
+        blocks,
+        text: isMenuNotice ? `[${dateStr} ${mealType}]` : "[새 게시물]",
+      }),
     });
 
     if (res.ok) {
