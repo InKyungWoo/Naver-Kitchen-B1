@@ -123,6 +123,12 @@ async function main() {
 
     // 가장 최신 게시물 1개만 처리 (첫 번째가 가장 최신)
     const latestLink = newLinks[0];
+    const latestPostId = extractPostId(latestLink);
+    const latestProcessedPosts = loadProcessedPosts();
+    if (latestPostId && latestProcessedPosts.includes(latestPostId)) {
+      console.log("⏭️ 락 대기 중 이미 처리된 게시물입니다. 전송 건너뜀");
+      return;
+    }
     console.log(`\n📍 최신 게시물 스크래핑: ${latestLink}`);
 
     const post = await scrapePost(browser, latestLink);
@@ -133,10 +139,12 @@ async function main() {
       console.log("✅ 전송 완료!");
 
       // 처리된 게시물로 기록
-      const postId = extractPostId(latestLink);
-      if (postId) {
-        processedPosts.push(postId);
-        saveProcessedPosts(processedPosts);
+      if (latestPostId) {
+        const newestProcessedPosts = loadProcessedPosts();
+        if (!newestProcessedPosts.includes(latestPostId)) {
+          newestProcessedPosts.push(latestPostId);
+          saveProcessedPosts(newestProcessedPosts);
+        }
       }
     } else {
       console.log("⚠️ 게시물 스크래핑 실패 (내용 없음)");

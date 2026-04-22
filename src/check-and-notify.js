@@ -98,6 +98,12 @@ async function main() {
       });
 
       const link = latestLink;
+      const postId = extractPostId(link);
+      const latestProcessedPosts = loadProcessedPosts();
+      if (postId && latestProcessedPosts.includes(postId)) {
+        console.log("⏭️ 락 대기 중 이미 처리된 게시물입니다. 전송 건너뜀");
+        return;
+      }
       console.log(`\n📍 게시물 스크래핑: ${link}`);
 
       const post = await scrapePost(browser, link);
@@ -109,10 +115,12 @@ async function main() {
         console.log("✅ 전송 완료!");
 
         // 처리된 게시물로 기록
-        const postId = extractPostId(link);
         if (postId) {
-          processedPosts.push(postId);
-          saveProcessedPosts(processedPosts);
+          const newestProcessedPosts = loadProcessedPosts();
+          if (!newestProcessedPosts.includes(postId)) {
+            newestProcessedPosts.push(postId);
+            saveProcessedPosts(newestProcessedPosts);
+          }
         }
       } else {
         console.log("⚠️ 게시물 스크래핑 실패 (내용 없음 또는 로그인 필요)");
