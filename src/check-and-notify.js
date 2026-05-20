@@ -12,18 +12,16 @@
 const puppeteer = require("puppeteer");
 const Imap = require("imap");
 const { simpleParser } = require("mailparser");
-const nodemailer = require("nodemailer");
 const fs = require("fs");
 const path = require("path");
 const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./browser-lock");
+const { sendErrorAlert } = require("./error-alert");
 require("dotenv").config();
 
 const IMAP_HOST = process.env.IMAP_HOST;
 const IMAP_USER = process.env.IMAP_USER;
 const IMAP_PASS = process.env.IMAP_PASS;
 const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
-const ALERT_EMAIL = process.env.ALERT_EMAIL; // 에러 알림 받을 이메일
-
 // 브라우저 프로필 경로
 const USER_DATA_DIR = path.join(__dirname, "..", ".browser-profile");
 
@@ -106,7 +104,7 @@ async function main() {
       }
       console.log(`\n📍 게시물 스크래핑: ${link}`);
 
-      const post = await scrapePost(browser, link);
+      const { post, reason } = await scrapePost(browser, link);
 
       if (post && post.content && post.content.length > 10) {
         // 슬랙 전송
@@ -122,9 +120,13 @@ async function main() {
             saveProcessedPosts(newestProcessedPosts);
           }
         }
+      } else if (reason === "login") {
+        console.log("⚠️ 로그인이 필요합니다");
+        await sendErrorAlert("로그인 세션이 만료되었습니다. npm run login 실행 필요.", { alertKey: "login" });
+      } else if (reason === "timeout") {
+        console.log("⚠️ 페이지 로딩 시간 초과. 다음 실행 때 재시도합니다.");
       } else {
-        console.log("⚠️ 게시물 스크래핑 실패 (내용 없음 또는 로그인 필요)");
-        await sendErrorAlert("스크래핑 실패: 내용이 비어있거나 로그인이 필요합니다. npm run login 실행 필요.");
+        console.log(`⚠️ 게시물 스크래핑 실패 (${reason || "unknown"})`);
       }
     } finally {
       if (browser) {
@@ -230,13 +232,13 @@ async function scrapePost(browser, url) {
   const page = await browser.newPage();
 
   try {
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
 
     // 로그인 페이지로 리다이렉트 되었는지 확인
     if (page.url().includes("auth.band.us") || page.url().includes("/login")) {
       console.log("   ⚠️ 로그인 필요 - npm run login 실행 필요");
-      return null;
+      return { post: null, reason: "login" };
     }
 
     // 게시물 내용 추출
@@ -309,10 +311,16 @@ async function scrapePost(browser, url) {
     });
 
     post.link = url;
-    return post;
+
+    if (!post.content || post.content.length <= 10) {
+      return { post: null, reason: "empty" };
+    }
+
+    return { post, reason: null };
   } catch (error) {
     console.error("   스크래핑 에러:", error.message);
-    return null;
+    const reason = /timeout/i.test(error.message) ? "timeout" : "error";
+    return { post: null, reason };
   } finally {
     await page.close();
   }
@@ -443,39 +451,9 @@ function saveProcessedPosts(posts) {
   fs.writeFileSync(PROCESSED_FILE, JSON.stringify(recentPosts, null, 2));
 }
 
-/**
- * 에러 알림 이메일 전송
- */
-async function sendErrorAlert(errorMessage) {
-  if (!ALERT_EMAIL) return;
-
-  try {
-    const transporter = nodemailer.createTransport({
-      host: IMAP_HOST.replace("imap.", "smtp."), // imap → smtp
-      port: 587,
-      secure: false,
-      auth: {
-        user: IMAP_USER,
-        pass: IMAP_PASS,
-      },
-    });
-
-    await transporter.sendMail({
-      from: IMAP_USER,
-      to: ALERT_EMAIL,
-      subject: "⚠️ [Kitchen Bot] 오류 발생",
-      text: `Kitchen Bot 실행 중 오류가 발생했습니다.\n\n시간: ${new Date().toLocaleString("ko-KR")}\n오류: ${errorMessage}\n\nnpm run login 으로 재로그인이 필요할 수 있습니다.`,
-    });
-
-    console.log("📧 에러 알림 메일 전송됨");
-  } catch (e) {
-    console.error("❌ 에러 알림 메일 전송 실패:", e.message);
-  }
-}
-
 // 실행
 main().catch(async (err) => {
   console.error("❌ 치명적 오류:", err.message);
-  await sendErrorAlert(err.message);
+  await sendErrorAlert(err.message, { alertKey: "fatal" });
   process.exit(1);
 });

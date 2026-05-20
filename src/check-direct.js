@@ -11,19 +11,14 @@
  */
 
 const puppeteer = require("puppeteer");
-const nodemailer = require("nodemailer");
 const fs = require("fs");
 const path = require("path");
 const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./browser-lock");
+const { sendErrorAlert } = require("./error-alert");
 require("dotenv").config();
 
 const BAND_URL = process.env.BAND_URL;
 const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
-const IMAP_HOST = process.env.IMAP_HOST;
-const IMAP_USER = process.env.IMAP_USER;
-const IMAP_PASS = process.env.IMAP_PASS;
-const ALERT_EMAIL = process.env.ALERT_EMAIL;
-
 const USER_DATA_DIR = path.join(__dirname, "..", ".browser-profile");
 const PROCESSED_FILE = path.join(__dirname, "..", ".processed-posts.json");
 
@@ -61,13 +56,13 @@ async function main() {
     const page = await browser.newPage();
 
     // 밴드 피드 페이지 접속
-    await page.goto(BAND_URL, { waitUntil: "networkidle2", timeout: 30000 });
+    await page.goto(BAND_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
     await new Promise((resolve) => setTimeout(resolve, 3000));
 
     // 로그인 페이지로 리다이렉트 되었는지 확인
     if (page.url().includes("auth.band.us") || page.url().includes("/login")) {
       console.log("⚠️ 로그인이 필요합니다. npm run login 실행 필요");
-      await sendErrorAlert("밴드 직접 체크: 로그인 세션 만료. npm run login 실행 필요.");
+      await sendErrorAlert("밴드 직접 체크: 로그인 세션 만료. npm run login 실행 필요.", { alertKey: "login" });
       return;
     }
 
@@ -131,7 +126,7 @@ async function main() {
     }
     console.log(`\n📍 최신 게시물 스크래핑: ${latestLink}`);
 
-    const post = await scrapePost(browser, latestLink);
+    const { post, reason } = await scrapePost(browser, latestLink);
 
     if (post && post.content && post.content.length > 10) {
       console.log("📤 슬랙으로 전송 중...");
@@ -146,15 +141,19 @@ async function main() {
           saveProcessedPosts(newestProcessedPosts);
         }
       }
+    } else if (reason === "login") {
+      console.log("⚠️ 로그인이 필요합니다");
+      await sendErrorAlert("로그인 세션이 만료되었습니다. npm run login 실행 필요.", { alertKey: "login" });
+    } else if (reason === "timeout") {
+      console.log("⚠️ 페이지 로딩 시간 초과. 다음 실행 때 재시도합니다.");
     } else {
-      console.log("⚠️ 게시물 스크래핑 실패 (내용 없음)");
+      console.log(`⚠️ 게시물 스크래핑 실패 (${reason || "unknown"})`);
     }
 
     console.log("\n🎉 완료!");
   } catch (error) {
     console.error("❌ 에러 발생:", error.message);
-    await sendErrorAlert(`밴드 직접 체크 오류: ${error.message}`);
-    throw error;
+    await sendErrorAlert(`밴드 직접 체크 오류: ${error.message}`, { alertKey: "check-direct-error" });
   } finally {
     if (browser) {
       const pages = await browser.pages();
@@ -173,12 +172,12 @@ async function scrapePost(browser, url) {
   const page = await browser.newPage();
 
   try {
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
 
     if (page.url().includes("auth.band.us") || page.url().includes("/login")) {
       console.log("   ⚠️ 로그인 필요");
-      return null;
+      return { post: null, reason: "login" };
     }
 
     const post = await page.evaluate(() => {
@@ -246,10 +245,16 @@ async function scrapePost(browser, url) {
     });
 
     post.link = url;
-    return post;
+
+    if (!post.content || post.content.length <= 10) {
+      return { post: null, reason: "empty" };
+    }
+
+    return { post, reason: null };
   } catch (error) {
     console.error("   스크래핑 에러:", error.message);
-    return null;
+    const reason = /timeout/i.test(error.message) ? "timeout" : "error";
+    return { post: null, reason };
   } finally {
     await page.close();
   }
@@ -362,35 +367,8 @@ function saveProcessedPosts(posts) {
   fs.writeFileSync(PROCESSED_FILE, JSON.stringify(recentPosts, null, 2));
 }
 
-async function sendErrorAlert(errorMessage) {
-  if (!ALERT_EMAIL || !IMAP_HOST || !IMAP_USER || !IMAP_PASS) return;
-
-  try {
-    const transporter = nodemailer.createTransport({
-      host: IMAP_HOST.replace("imap.", "smtp."),
-      port: 587,
-      secure: false,
-      auth: {
-        user: IMAP_USER,
-        pass: IMAP_PASS,
-      },
-    });
-
-    await transporter.sendMail({
-      from: IMAP_USER,
-      to: ALERT_EMAIL,
-      subject: "⚠️ [Kitchen Bot] 오류 발생",
-      text: `Kitchen Bot 실행 중 오류가 발생했습니다.\n\n시간: ${new Date().toLocaleString("ko-KR")}\n오류: ${errorMessage}\n\nnpm run login 으로 재로그인이 필요할 수 있습니다.`,
-    });
-
-    console.log("📧 에러 알림 메일 전송됨");
-  } catch (e) {
-    console.error("❌ 에러 알림 메일 전송 실패:", e.message);
-  }
-}
-
 main().catch(async (err) => {
   console.error("❌ 치명적 오류:", err.message);
-  await sendErrorAlert(err.message);
+  await sendErrorAlert(err.message, { alertKey: "fatal" });
   process.exit(1);
 });
