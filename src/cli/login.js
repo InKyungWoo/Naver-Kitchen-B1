@@ -7,8 +7,8 @@
  */
 
 const puppeteer = require("puppeteer");
-const { USER_DATA_DIR } = require("./lib/paths");
-const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./lib/browser-lock");
+const { USER_DATA_DIR } = require("../lib/paths");
+const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("../lib/browser-lock");
 require("dotenv").config();
 
 // 대기 함수 (waitForTimeout 대체)

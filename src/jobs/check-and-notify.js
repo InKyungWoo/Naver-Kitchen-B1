@@ -12,13 +12,13 @@
 const Imap = require("imap");
 const { simpleParser } = require("mailparser");
 const fs = require("fs");
-const { USER_DATA_DIR } = require("./lib/paths");
-const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./lib/browser-lock");
-const { sendErrorAlert } = require("./lib/error-alert");
-const { launchBrowser, closeBrowser } = require("./lib/browser-session");
-const { extractPostId, scrapePost } = require("./lib/band-post");
-const { sendToSlack } = require("./lib/slack");
-const { loadProcessedPosts, markProcessed } = require("./lib/processed-posts");
+const { USER_DATA_DIR } = require("../lib/paths");
+const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("../lib/browser-lock");
+const { sendErrorAlert } = require("../lib/error-alert");
+const { launchBrowser, closeBrowser } = require("../lib/browser-session");
+const { extractPostId, scrapePost } = require("../lib/band-post");
+const { sendToSlack } = require("../lib/slack");
+const { loadProcessedPosts, markProcessed } = require("../lib/processed-posts");
 require("dotenv").config();
 
 const IMAP_HOST = process.env.IMAP_HOST;

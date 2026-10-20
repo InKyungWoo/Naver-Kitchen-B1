@@ -5,11 +5,11 @@
  * 예시: npm run send -- https://www.band.us/band/47113445/post/926902987
  */
 
-const { USER_DATA_DIR } = require("./lib/paths");
-const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./lib/browser-lock");
-const { launchBrowser, closeBrowser } = require("./lib/browser-session");
-const { scrapePost } = require("./lib/band-post");
-const { sendToSlack } = require("./lib/slack");
+const { USER_DATA_DIR } = require("../lib/paths");
+const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("../lib/browser-lock");
+const { launchBrowser, closeBrowser } = require("../lib/browser-session");
+const { scrapePost } = require("../lib/band-post");
+const { sendToSlack } = require("../lib/slack");
 require("dotenv").config();
 
 const url = process.argv[2];
