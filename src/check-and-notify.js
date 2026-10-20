@@ -6,27 +6,25 @@
  * 3. 브라우저 프로필로 해당 게시물 스크래핑
  * 4. 슬랙으로 전송
  *
- * 사용법: node scripts/check-and-notify.js
+ * 사용법: npm run check
  */
 
 const Imap = require("imap");
 const { simpleParser } = require("mailparser");
 const fs = require("fs");
-const path = require("path");
-const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./browser-lock");
-const { sendErrorAlert } = require("./error-alert");
-const { launchBrowser, watchDialogs, detectPageState, closeBrowser } = require("./browser-session");
+const { USER_DATA_DIR } = require("./lib/paths");
+const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./lib/browser-lock");
+const { sendErrorAlert } = require("./lib/error-alert");
+const { launchBrowser, closeBrowser } = require("./lib/browser-session");
+const { extractPostId, scrapePost } = require("./lib/band-post");
+const { sendToSlack } = require("./lib/slack");
+const { loadProcessedPosts, markProcessed } = require("./lib/processed-posts");
 require("dotenv").config();
 
 const IMAP_HOST = process.env.IMAP_HOST;
 const IMAP_USER = process.env.IMAP_USER;
 const IMAP_PASS = process.env.IMAP_PASS;
 const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
-// 브라우저 프로필 경로
-const USER_DATA_DIR = path.join(__dirname, "..", ".browser-profile");
-
-// 처리된 게시물 ID 저장 파일
-const PROCESSED_FILE = path.join(__dirname, "..", ".processed-posts.json");
 
 async function main() {
   console.log("🚀 밴드 체크 시작...", new Date().toLocaleString("ko-KR"));
@@ -215,249 +213,6 @@ function checkMailForBandLinks() {
     imap.once("end", () => resolve(bandLinks));
     imap.connect();
   });
-}
-
-/**
- * 게시물 스크래핑
- */
-async function scrapePost(browser, url) {
-  const page = await browser.newPage();
-  const dialogState = watchDialogs(page);
-
-  try {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-
-    // 로그인 만료 / 삭제된 게시물 확인
-    const state = await detectPageState(page, dialogState);
-    if (state === "login") {
-      console.log("   ⚠️ 로그인 필요 - npm run login 실행 필요");
-      return { post: null, reason: "login" };
-    }
-    if (state === "deleted") {
-      return { post: null, reason: "deleted" };
-    }
-
-    // 게시물 내용 추출
-    const post = await page.evaluate(() => {
-      // 작성자
-      const authorEl = document.querySelector('.postWriter .name, .author, [class*="author"], [class*="writer"], .uAuthor, .bandName');
-      const author = authorEl?.textContent?.trim() || "KITCHEN B1";
-
-      // 작성 시간
-      const timeEl = document.querySelector('.postTime, .time, time, [class*="time"], .uTime, .createTime');
-      const time = timeEl?.textContent?.trim() || "";
-
-      // 본문 텍스트 - 여러 선택자 시도 (innerText로 줄바꿈 유지)
-      let content = "";
-      const contentSelectors = [
-        ".postBody .txt",
-        ".postText",
-        ".dPostBody",
-        ".textWrap",
-        '[class*="postText"]',
-        '[class*="PostText"]',
-        ".text",
-        "p.txt",
-      ];
-      for (const selector of contentSelectors) {
-        const el = document.querySelector(selector);
-        if (el && el.innerText?.trim()) {
-          content = el.innerText.trim();
-          break;
-        }
-      }
-
-      // 이미지 URL들 - 다양한 선택자로 추출
-      const imageSelectors = [
-        ".postBody img",
-        ".photo img",
-        ".dPhotoArea img",
-        ".photoList img",
-        ".imageWrap img",
-        '[class*="photo"] img',
-        '[class*="Photo"] img',
-        '[class*="image"] img',
-        ".postMedia img",
-        'img[src*="phinf.pstatic.net"]',
-      ];
-
-      const images = [];
-      const seenUrls = new Set();
-
-      imageSelectors.forEach((selector) => {
-        document.querySelectorAll(selector).forEach((img) => {
-          const src = img.src || img.getAttribute("data-src") || img.getAttribute("data-original");
-          if (
-            src &&
-            !src.includes("profile") &&
-            !src.includes("avatar") &&
-            !src.includes("icon") &&
-            !src.includes("logo") &&
-            !src.includes("emoji") &&
-            src.includes("phinf.pstatic.net") && // 밴드 이미지 서버
-            !seenUrls.has(src)
-          ) {
-            seenUrls.add(src);
-            images.push(src);
-          }
-        });
-      });
-
-      return { author, time, content, images };
-    });
-
-    post.link = url;
-
-    if (!post.content || post.content.length <= 10) {
-      return { post: null, reason: "empty" };
-    }
-
-    return { post, reason: null };
-  } catch (error) {
-    console.error("   스크래핑 에러:", error.message);
-    const reason = /timeout/i.test(error.message) ? "timeout" : "error";
-    return { post: null, reason };
-  } finally {
-    await page.close().catch(() => {});
-  }
-}
-
-/**
- * 슬랙으로 전송
- */
-async function sendToSlack(post) {
-  const contentRaw = post.content || "";
-  const isMenuNotice = /\[\s*COURSE\s*\d+\s*\/\s*\d+\s*\]/i.test(contentRaw);
-
-  // 시간에서 점심/저녁 판단
-  const timeStr = post.time || "";
-  let mealType = "메뉴";
-  if (timeStr.includes("오후")) {
-    const hourMatch = timeStr.match(/오후\s*(\d+)/);
-    if (hourMatch) {
-      const hour = parseInt(hourMatch[1]);
-      mealType = hour >= 5 ? "저녁 메뉴" : "점심 메뉴";
-    }
-  } else {
-    mealType = "점심 메뉴";
-  }
-
-  // 날짜 추출 (예: "2월 4일")
-  const dateMatch = timeStr.match(/(\d+)월\s*(\d+)일/);
-  const dateStr = dateMatch ? `${dateMatch[1]}월 ${dateMatch[2]}일` : "오늘";
-
-  // 본문 정리
-  let content = contentRaw;
-  if (content.length > 2000) {
-    content = content.substring(0, 2000) + "...";
-  }
-
-  const blocks = [];
-  if (isMenuNotice) {
-    blocks.push({
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `*😋 ${dateStr} ${mealType}*`,
-      },
-    });
-  }
-
-  // 본문 내용
-  if (content) {
-    blocks.push({
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: content,
-      },
-    });
-  }
-
-  // 이미지들 (최대 3개)
-  const imagesToShow = post.images.slice(0, 3);
-  console.log(`   🖼️ 이미지 ${imagesToShow.length}장 첨부`);
-  imagesToShow.forEach((imageUrl, index) => {
-    blocks.push({
-      type: "image",
-      image_url: imageUrl,
-      alt_text: `메뉴 이미지 ${index + 1}`,
-    });
-  });
-
-  // 원본 링크
-  if (post.link) {
-    blocks.push({
-      type: "context",
-      elements: [
-        {
-          type: "mrkdwn",
-          text: `<${post.link}|📎 밴드에서 보기>`,
-        },
-      ],
-    });
-  }
-
-  const payload = {
-    blocks,
-    text: isMenuNotice
-      ? `[${dateStr} ${mealType}] ${post.content?.substring(0, 100) || "새 메뉴가 올라왔습니다"}...`
-      : `${post.content?.substring(0, 100) || "새 게시물이 올라왔습니다"}...`,
-  };
-
-  const response = await fetch(SLACK_WEBHOOK_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Slack webhook failed: ${response.status}`);
-  }
-}
-
-/**
- * 게시물 ID 추출
- */
-function extractPostId(url) {
-  const match = url.match(/\/post\/(\d+)/);
-  return match ? match[1] : null;
-}
-
-/**
- * 처리된 게시물 목록 로드
- */
-function loadProcessedPosts() {
-  try {
-    if (fs.existsSync(PROCESSED_FILE)) {
-      return JSON.parse(fs.readFileSync(PROCESSED_FILE, "utf8"));
-    }
-  } catch (e) {
-    // 파일이 없거나 파싱 에러
-  }
-  return [];
-}
-
-/**
- * 게시물을 처리 완료로 기록
- */
-function markProcessed(postId) {
-  if (!postId) return;
-  const posts = loadProcessedPosts();
-  if (!posts.includes(postId)) {
-    posts.push(postId);
-    saveProcessedPosts(posts);
-  }
-}
-
-/**
- * 처리된 게시물 목록 저장
- */
-function saveProcessedPosts(posts) {
-  // 최근 100개만 유지
-  const recentPosts = posts.slice(-100);
-  fs.writeFileSync(PROCESSED_FILE, JSON.stringify(recentPosts, null, 2));
 }
 
 // 실행

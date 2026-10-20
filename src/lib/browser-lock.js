@@ -1,12 +1,10 @@
 /**
  * 동일한 Puppeteer userDataDir을 쓰는 스크립트가 동시에 실행되면
- * 프로필이 깨지거나 로그인 세션이 손상될 수 있어, 파일 락으로 직렬화합니다.
+ * 프로필이 깨지거나 로그인 세션이 손상될 수 있어, 파일 락으로 직렬화
  */
 
 const fs = require("fs");
-const path = require("path");
-
-const LOCK_PATH = path.join(__dirname, "..", ".browser-profile.lock");
+const { LOCK_PATH } = require("./paths");
 
 function isPidAlive(pid) {
   if (!Number.isFinite(pid) || pid <= 0) return false;

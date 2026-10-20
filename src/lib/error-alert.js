@@ -3,7 +3,6 @@
  */
 
 const fs = require("fs");
-const path = require("path");
 const nodemailer = require("nodemailer");
 require("dotenv").config();
 
@@ -11,7 +10,7 @@ const ALERT_EMAIL = process.env.ALERT_EMAIL;
 const IMAP_HOST = process.env.IMAP_HOST;
 const IMAP_USER = process.env.IMAP_USER;
 const IMAP_PASS = process.env.IMAP_PASS;
-const STATE_FILE = path.join(__dirname, "..", ".alert-state.json");
+const { ALERT_STATE_FILE: STATE_FILE } = require("./paths");
 const COOLDOWN_MS = 60 * 60 * 1000;
 
 function loadState() {

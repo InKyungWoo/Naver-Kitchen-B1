@@ -11,16 +11,17 @@
  */
 
 const fs = require("fs");
-const path = require("path");
-const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./browser-lock");
-const { sendErrorAlert } = require("./error-alert");
-const { launchBrowser, watchDialogs, detectPageState, closeBrowser } = require("./browser-session");
+const { USER_DATA_DIR } = require("./lib/paths");
+const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./lib/browser-lock");
+const { sendErrorAlert } = require("./lib/error-alert");
+const { launchBrowser, watchDialogs, detectPageState, closeBrowser } = require("./lib/browser-session");
+const { extractPostId, scrapePost } = require("./lib/band-post");
+const { sendToSlack } = require("./lib/slack");
+const { loadProcessedPosts, markProcessed } = require("./lib/processed-posts");
 require("dotenv").config();
 
 const BAND_URL = process.env.BAND_URL;
 const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
-const USER_DATA_DIR = path.join(__dirname, "..", ".browser-profile");
-const PROCESSED_FILE = path.join(__dirname, "..", ".processed-posts.json");
 
 async function main() {
   console.log("🔍 밴드 직접 체크 시작...", new Date().toLocaleString("ko-KR"));
@@ -158,222 +159,6 @@ async function main() {
       releaseBrowserProfileLock(lockFd);
     }
   }
-}
-
-/**
- * 게시물 스크래핑
- */
-async function scrapePost(browser, url) {
-  const page = await browser.newPage();
-  const dialogState = watchDialogs(page);
-
-  try {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-
-    const state = await detectPageState(page, dialogState);
-    if (state === "login") {
-      console.log("   ⚠️ 로그인 필요");
-      return { post: null, reason: "login" };
-    }
-    if (state === "deleted") {
-      return { post: null, reason: "deleted" };
-    }
-
-    const post = await page.evaluate(() => {
-      const authorEl = document.querySelector('.postWriter .name, .author, [class*="author"], [class*="writer"], .uAuthor, .bandName');
-      const author = authorEl?.textContent?.trim() || "KITCHEN B1";
-
-      const timeEl = document.querySelector('.postTime, .time, time, [class*="time"], .uTime, .createTime');
-      const time = timeEl?.textContent?.trim() || "";
-
-      let content = "";
-      const contentSelectors = [
-        ".postBody .txt",
-        ".postText",
-        ".dPostBody",
-        ".textWrap",
-        '[class*="postText"]',
-        '[class*="PostText"]',
-        ".text",
-        "p.txt",
-      ];
-      for (const selector of contentSelectors) {
-        const el = document.querySelector(selector);
-        if (el && el.innerText?.trim()) {
-          content = el.innerText.trim();
-          break;
-        }
-      }
-
-      const imageSelectors = [
-        ".postBody img",
-        ".photo img",
-        ".dPhotoArea img",
-        ".photoList img",
-        ".imageWrap img",
-        '[class*="photo"] img',
-        '[class*="Photo"] img',
-        '[class*="image"] img',
-        ".postMedia img",
-        'img[src*="phinf.pstatic.net"]',
-      ];
-
-      const images = [];
-      const seenUrls = new Set();
-
-      imageSelectors.forEach((selector) => {
-        document.querySelectorAll(selector).forEach((img) => {
-          const src = img.src || img.getAttribute("data-src") || img.getAttribute("data-original");
-          if (
-            src &&
-            !src.includes("profile") &&
-            !src.includes("avatar") &&
-            !src.includes("icon") &&
-            !src.includes("logo") &&
-            !src.includes("emoji") &&
-            src.includes("phinf.pstatic.net") &&
-            !seenUrls.has(src)
-          ) {
-            seenUrls.add(src);
-            images.push(src);
-          }
-        });
-      });
-
-      return { author, time, content, images };
-    });
-
-    post.link = url;
-
-    if (!post.content || post.content.length <= 10) {
-      return { post: null, reason: "empty" };
-    }
-
-    return { post, reason: null };
-  } catch (error) {
-    console.error("   스크래핑 에러:", error.message);
-    const reason = /timeout/i.test(error.message) ? "timeout" : "error";
-    return { post: null, reason };
-  } finally {
-    await page.close().catch(() => {});
-  }
-}
-
-/**
- * 슬랙으로 전송
- */
-async function sendToSlack(post) {
-  const contentRaw = post.content || "";
-  const isMenuNotice = /\[\s*COURSE\s*\d+\s*\/\s*\d+\s*\]/i.test(contentRaw);
-
-  const timeStr = post.time || "";
-  let mealType = "메뉴";
-  if (timeStr.includes("오후")) {
-    const hourMatch = timeStr.match(/오후\s*(\d+)/);
-    if (hourMatch) {
-      const hour = parseInt(hourMatch[1]);
-      mealType = hour >= 5 ? "저녁 메뉴" : "점심 메뉴";
-    }
-  } else {
-    mealType = "점심 메뉴";
-  }
-
-  const dateMatch = timeStr.match(/(\d+)월\s*(\d+)일/);
-  const dateStr = dateMatch ? `${dateMatch[1]}월 ${dateMatch[2]}일` : "오늘";
-
-  let content = contentRaw;
-  if (content.length > 2000) {
-    content = content.substring(0, 2000) + "...";
-  }
-
-  const blocks = [];
-  if (isMenuNotice) {
-    blocks.push({
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `*😋 ${dateStr} ${mealType}*`,
-      },
-    });
-  }
-
-  if (content) {
-    blocks.push({
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: content,
-      },
-    });
-  }
-
-  const imagesToShow = post.images.slice(0, 3);
-  console.log(`   🖼️ 이미지 ${imagesToShow.length}장 첨부`);
-  imagesToShow.forEach((imageUrl, index) => {
-    blocks.push({
-      type: "image",
-      image_url: imageUrl,
-      alt_text: `메뉴 이미지 ${index + 1}`,
-    });
-  });
-
-  if (post.link) {
-    blocks.push({
-      type: "context",
-      elements: [
-        {
-          type: "mrkdwn",
-          text: `<${post.link}|📎 밴드에서 보기>`,
-        },
-      ],
-    });
-  }
-
-  const payload = {
-    blocks,
-    text: isMenuNotice
-      ? `[${dateStr} ${mealType}] ${post.content?.substring(0, 100) || "새 메뉴가 올라왔습니다"}...`
-      : `${post.content?.substring(0, 100) || "새 게시물이 올라왔습니다"}...`,
-  };
-
-  const response = await fetch(SLACK_WEBHOOK_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Slack webhook failed: ${response.status}`);
-  }
-}
-
-function extractPostId(url) {
-  const match = url.match(/\/post\/(\d+)/);
-  return match ? match[1] : null;
-}
-
-function loadProcessedPosts() {
-  try {
-    if (fs.existsSync(PROCESSED_FILE)) {
-      return JSON.parse(fs.readFileSync(PROCESSED_FILE, "utf8"));
-    }
-  } catch (e) {}
-  return [];
-}
-
-function markProcessed(postId) {
-  if (!postId) return;
-  const posts = loadProcessedPosts();
-  if (!posts.includes(postId)) {
-    posts.push(postId);
-    saveProcessedPosts(posts);
-  }
-}
-
-function saveProcessedPosts(posts) {
-  const recentPosts = posts.slice(-100);
-  fs.writeFileSync(PROCESSED_FILE, JSON.stringify(recentPosts, null, 2));
 }
 
 main().catch(async (err) => {

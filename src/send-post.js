@@ -5,13 +5,12 @@
  * 예시: npm run send -- https://www.band.us/band/47113445/post/926902987
  */
 
-const path = require("path");
-const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./browser-lock");
-const { launchBrowser, watchDialogs, detectPageState, closeBrowser } = require("./browser-session");
+const { USER_DATA_DIR } = require("./lib/paths");
+const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./lib/browser-lock");
+const { launchBrowser, closeBrowser } = require("./lib/browser-session");
+const { scrapePost } = require("./lib/band-post");
+const { sendToSlack } = require("./lib/slack");
 require("dotenv").config();
-
-const USER_DATA_DIR = path.join(__dirname, "..", ".browser-profile");
-const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
 
 const url = process.argv[2];
 
@@ -33,135 +32,26 @@ async function sendPost() {
   let browser;
   try {
     browser = await launchBrowser(USER_DATA_DIR);
-    const page = await browser.newPage();
-    const dialogState = watchDialogs(page);
     console.log(`📍 페이지 로딩: ${url}`);
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
-    await new Promise((r) => setTimeout(r, 2000));
+    const { post, reason } = await scrapePost(browser, url);
 
-    const state = await detectPageState(page, dialogState);
-    if (state === "login") {
+    if (reason === "login") {
       console.log("❌ 로그인 필요 - npm run login 먼저 실행하세요");
       return;
     }
-    if (state === "deleted") {
+    if (reason === "deleted") {
       console.log("❌ 삭제되었거나 찾을 수 없는 게시물입니다");
       return;
     }
-
-    const post = await page.evaluate(() => {
-      const timeEl = document.querySelector(".postTime, .time, time, [class*='time']");
-      const time = timeEl?.textContent?.trim() || "";
-
-      let content = "";
-      const selectors = [".postBody .txt", ".postText", ".dPostBody", ".textWrap", "[class*='postText']"];
-      for (const sel of selectors) {
-        const el = document.querySelector(sel);
-        if (el?.innerText?.trim()) {
-          content = el.innerText.trim();
-          break;
-        }
-      }
-
-      const images = [];
-      const seenUrls = new Set();
-
-      // 게시물 본문 영역의 이미지만 가져오기
-      const imageSelectors = [".postBody img", ".postMedia img", ".imageWrap img", '[class*="photo"] img', '[class*="image"] img'];
-
-      imageSelectors.forEach((selector) => {
-        document.querySelectorAll(selector).forEach((img) => {
-          const src = img.src || img.dataset?.src;
-          if (
-            src &&
-            src.includes("phinf.pstatic.net") &&
-            !src.includes("profile") &&
-            !src.includes("avatar") &&
-            !src.includes("icon") &&
-            !src.includes("logo") &&
-            !src.includes("emoji") &&
-            img.width > 100 &&
-            !seenUrls.has(src)
-          ) {
-            seenUrls.add(src);
-            images.push(src);
-          }
-        });
-      });
-
-      return { time, content, images };
-    });
-
-    post.link = url;
-
-    console.log(`📄 내용: ${post.content?.substring(0, 50)}...`);
-    console.log(`🖼️ 이미지: ${post.images.length}개`);
-
-    if (!post.content || post.content.length < 10) {
-      console.log("❌ 게시물 내용을 가져오지 못했습니다");
+    if (!post) {
+      console.log(`❌ 게시물 내용을 가져오지 못했습니다 (${reason})`);
       return;
     }
 
-    const isMenuNotice = /\[\s*COURSE\s*\d+\s*\/\s*\d+\s*\]/i.test(post.content || "");
-
-    // 시간에서 점심/저녁 판단
-    const timeStr = post.time || "";
-    let mealType = "메뉴";
-    if (timeStr.includes("오후")) {
-      const hourMatch = timeStr.match(/오후\s*(\d+)/);
-      if (hourMatch) {
-        const hour = parseInt(hourMatch[1]);
-        mealType = hour >= 5 ? "저녁 메뉴" : "점심 메뉴";
-      }
-    } else {
-      mealType = "점심 메뉴";
-    }
-
-    const dateMatch = timeStr.match(/(\d+)월\s*(\d+)일/);
-    const dateStr = dateMatch ? `${dateMatch[1]}월 ${dateMatch[2]}일` : "오늘";
-
-    // 슬랙 블록 생성
-    const blocks = [];
-    if (isMenuNotice) {
-      blocks.push({
-        type: "section",
-        text: { type: "mrkdwn", text: `*😋 ${dateStr} ${mealType}*` },
-      });
-    }
-    blocks.push({
-      type: "section",
-      text: { type: "mrkdwn", text: post.content.substring(0, 2000) },
-    });
-
-    post.images.slice(0, 3).forEach((img, i) => {
-      blocks.push({
-        type: "image",
-        image_url: img,
-        alt_text: `메뉴 이미지 ${i + 1}`,
-      });
-    });
-
-    blocks.push({
-      type: "context",
-      elements: [{ type: "mrkdwn", text: `<${post.link}|📎 밴드에서 보기>` }],
-    });
-
-    // 슬랙 전송
+    console.log(`📄 내용: ${post.content.substring(0, 50)}...`);
     console.log("📤 슬랙으로 전송 중...");
-    const res = await fetch(SLACK_WEBHOOK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        blocks,
-        text: isMenuNotice ? `[${dateStr} ${mealType}]` : "[새 게시물]",
-      }),
-    });
-
-    if (res.ok) {
-      console.log("✅ 전송 완료!");
-    } else {
-      console.log(`❌ 전송 실패: ${res.status}`);
-    }
+    await sendToSlack(post);
+    console.log("✅ 전송 완료!");
   } catch (error) {
     console.error("❌ 에러:", error.message);
   } finally {

@@ -3,13 +3,12 @@
  * 브라우저로 밴드 방문만 해서 쿠키 갱신
  */
 
-const path = require("path");
-const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./browser-lock");
-const { sendErrorAlert } = require("./error-alert");
-const { launchBrowser, watchDialogs, detectPageState, closeBrowser } = require("./browser-session");
+const { USER_DATA_DIR } = require("./lib/paths");
+const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./lib/browser-lock");
+const { sendErrorAlert } = require("./lib/error-alert");
+const { launchBrowser, watchDialogs, detectPageState, closeBrowser } = require("./lib/browser-session");
 require("dotenv").config();
 
-const USER_DATA_DIR = path.join(__dirname, "..", ".browser-profile");
 const BAND_URL = process.env.BAND_URL || "https://band.us/home";
 
 async function keepSession() {

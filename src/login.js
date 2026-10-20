@@ -7,12 +7,9 @@
  */
 
 const puppeteer = require("puppeteer");
-const path = require("path");
-const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./browser-lock");
+const { USER_DATA_DIR } = require("./lib/paths");
+const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./lib/browser-lock");
 require("dotenv").config();
-
-// 브라우저 프로필 저장 경로
-const USER_DATA_DIR = path.join(__dirname, "..", ".browser-profile");
 
 // 대기 함수 (waitForTimeout 대체)
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
