@@ -3,10 +3,10 @@
  * 브라우저로 밴드 방문만 해서 쿠키 갱신
  */
 
-const puppeteer = require("puppeteer");
 const path = require("path");
 const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./browser-lock");
 const { sendErrorAlert } = require("./error-alert");
+const { launchBrowser, watchDialogs, detectPageState, closeBrowser } = require("./browser-session");
 require("dotenv").config();
 
 const USER_DATA_DIR = path.join(__dirname, "..", ".browser-profile");
@@ -23,16 +23,15 @@ async function keepSession() {
 
   let browser;
   try {
-    browser = await puppeteer.launch({
-      headless: "new",
-      userDataDir: USER_DATA_DIR,
-    });
+    browser = await launchBrowser(USER_DATA_DIR);
 
     const page = await browser.newPage();
+    const dialogState = watchDialogs(page);
     await page.goto(BAND_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
 
     // 로그인 상태 확인
-    if (page.url().includes("auth.band.us") || page.url().includes("/login")) {
+    if ((await detectPageState(page, dialogState)) === "login") {
       console.log("⚠️ 로그인 풀림 - npm run login 필요");
       await sendErrorAlert("로그인이 풀렸습니다. npm run login 실행 필요.", { alertKey: "login" });
     } else {
@@ -47,12 +46,11 @@ async function keepSession() {
     }
     await sendErrorAlert(error.message, { alertKey });
   } finally {
-    if (browser) {
-      const pages = await browser.pages();
-      await Promise.all(pages.map((p) => p.close()));
-      await browser.close();
+    try {
+      await closeBrowser(browser);
+    } finally {
+      releaseBrowserProfileLock(lockFd);
     }
-    releaseBrowserProfileLock(lockFd);
   }
 }
 

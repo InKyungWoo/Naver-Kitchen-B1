@@ -10,11 +10,11 @@
  * 사용법: node src/check-direct.js
  */
 
-const puppeteer = require("puppeteer");
 const fs = require("fs");
 const path = require("path");
 const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./browser-lock");
 const { sendErrorAlert } = require("./error-alert");
+const { launchBrowser, watchDialogs, detectPageState, closeBrowser } = require("./browser-session");
 require("dotenv").config();
 
 const BAND_URL = process.env.BAND_URL;
@@ -46,21 +46,18 @@ async function main() {
 
   let browser;
   try {
-    browser = await puppeteer.launch({
-      headless: true,
-      defaultViewport: { width: 1280, height: 800 },
-      userDataDir: USER_DATA_DIR,
-    });
+    browser = await launchBrowser(USER_DATA_DIR);
 
     console.log("🌐 밴드 피드 접속 중...");
     const page = await browser.newPage();
+    const feedDialogState = watchDialogs(page);
 
     // 밴드 피드 페이지 접속
     await page.goto(BAND_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
     await new Promise((resolve) => setTimeout(resolve, 3000));
 
-    // 로그인 페이지로 리다이렉트 되었는지 확인
-    if (page.url().includes("auth.band.us") || page.url().includes("/login")) {
+    // 로그인 만료 확인 (리다이렉트 또는 "멤버만 볼 수 있습니다" 화면)
+    if ((await detectPageState(page, feedDialogState)) === "login") {
       console.log("⚠️ 로그인이 필요합니다. npm run login 실행 필요");
       await sendErrorAlert("밴드 직접 체크: 로그인 세션 만료. npm run login 실행 필요.", { alertKey: "login" });
       return;
@@ -82,8 +79,8 @@ async function main() {
             const match = href.match(/\/band\/\d+\/post\/(\d+)/);
             if (match && !seenIds.has(match[1])) {
               seenIds.add(match[1]);
-              // 쿼리스트링 제거한 깔끔한 URL
-              const cleanUrl = href.split("?")[0];
+              // 쿼리스트링·댓글 경로(/comment/N) 제거한 게시물 URL
+              const cleanUrl = new URL(href).origin + match[0];
               links.push(cleanUrl);
             }
           }
@@ -103,10 +100,11 @@ async function main() {
     // 처리된 게시물 목록 로드
     const processedPosts = loadProcessedPosts();
 
-    // 새 게시물 필터링
+    // 새 게시물 필터링 (상단 고정 공지 등 옛 게시물 제외: 처리된 최신 ID보다 큰 것만)
+    const newestProcessedId = processedPosts.reduce((max, id) => Math.max(max, Number(id) || 0), 0);
     const newLinks = postLinks.filter((link) => {
       const postId = extractPostId(link);
-      return postId && !processedPosts.includes(postId);
+      return postId && !processedPosts.includes(postId) && Number(postId) > newestProcessedId;
     });
 
     if (newLinks.length === 0) {
@@ -133,14 +131,10 @@ async function main() {
       await sendToSlack(post);
       console.log("✅ 전송 완료!");
 
-      // 처리된 게시물로 기록
-      if (latestPostId) {
-        const newestProcessedPosts = loadProcessedPosts();
-        if (!newestProcessedPosts.includes(latestPostId)) {
-          newestProcessedPosts.push(latestPostId);
-          saveProcessedPosts(newestProcessedPosts);
-        }
-      }
+      markProcessed(latestPostId);
+    } else if (reason === "deleted") {
+      console.log("🗑️ 삭제된 게시물입니다. 처리 완료로 기록하고 건너뜁니다.");
+      markProcessed(latestPostId);
     } else if (reason === "login") {
       console.log("⚠️ 로그인이 필요합니다");
       await sendErrorAlert("로그인 세션이 만료되었습니다. npm run login 실행 필요.", { alertKey: "login" });
@@ -155,13 +149,14 @@ async function main() {
     console.error("❌ 에러 발생:", error.message);
     await sendErrorAlert(`밴드 직접 체크 오류: ${error.message}`, { alertKey: "check-direct-error" });
   } finally {
-    if (browser) {
-      const pages = await browser.pages();
-      await Promise.all(pages.map((p) => p.close()));
-      await browser.close();
-      console.log("🔒 브라우저 종료");
+    try {
+      if (browser) {
+        await closeBrowser(browser);
+        console.log("🔒 브라우저 종료");
+      }
+    } finally {
+      releaseBrowserProfileLock(lockFd);
     }
-    releaseBrowserProfileLock(lockFd);
   }
 }
 
@@ -170,14 +165,19 @@ async function main() {
  */
 async function scrapePost(browser, url) {
   const page = await browser.newPage();
+  const dialogState = watchDialogs(page);
 
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
     await new Promise((resolve) => setTimeout(resolve, 3000));
 
-    if (page.url().includes("auth.band.us") || page.url().includes("/login")) {
+    const state = await detectPageState(page, dialogState);
+    if (state === "login") {
       console.log("   ⚠️ 로그인 필요");
       return { post: null, reason: "login" };
+    }
+    if (state === "deleted") {
+      return { post: null, reason: "deleted" };
     }
 
     const post = await page.evaluate(() => {
@@ -256,7 +256,7 @@ async function scrapePost(browser, url) {
     const reason = /timeout/i.test(error.message) ? "timeout" : "error";
     return { post: null, reason };
   } finally {
-    await page.close();
+    await page.close().catch(() => {});
   }
 }
 
@@ -360,6 +360,15 @@ function loadProcessedPosts() {
     }
   } catch (e) {}
   return [];
+}
+
+function markProcessed(postId) {
+  if (!postId) return;
+  const posts = loadProcessedPosts();
+  if (!posts.includes(postId)) {
+    posts.push(postId);
+    saveProcessedPosts(posts);
+  }
 }
 
 function saveProcessedPosts(posts) {

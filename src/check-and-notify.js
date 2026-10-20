@@ -9,13 +9,13 @@
  * 사용법: node scripts/check-and-notify.js
  */
 
-const puppeteer = require("puppeteer");
 const Imap = require("imap");
 const { simpleParser } = require("mailparser");
 const fs = require("fs");
 const path = require("path");
 const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./browser-lock");
 const { sendErrorAlert } = require("./error-alert");
+const { launchBrowser, watchDialogs, detectPageState, closeBrowser } = require("./browser-session");
 require("dotenv").config();
 
 const IMAP_HOST = process.env.IMAP_HOST;
@@ -89,11 +89,7 @@ async function main() {
     console.log("🌐 브라우저 시작...");
     let browser;
     try {
-      browser = await puppeteer.launch({
-        headless: true, // 백그라운드 실행
-        defaultViewport: { width: 1280, height: 800 },
-        userDataDir: USER_DATA_DIR,
-      });
+      browser = await launchBrowser(USER_DATA_DIR);
 
       const link = latestLink;
       const postId = extractPostId(link);
@@ -111,15 +107,10 @@ async function main() {
         console.log("📤 슬랙으로 전송 중...");
         await sendToSlack(post);
         console.log("✅ 전송 완료!");
-
-        // 처리된 게시물로 기록
-        if (postId) {
-          const newestProcessedPosts = loadProcessedPosts();
-          if (!newestProcessedPosts.includes(postId)) {
-            newestProcessedPosts.push(postId);
-            saveProcessedPosts(newestProcessedPosts);
-          }
-        }
+        markProcessed(postId);
+      } else if (reason === "deleted") {
+        console.log("🗑️ 삭제된 게시물입니다. 처리 완료로 기록하고 건너뜁니다.");
+        markProcessed(postId);
       } else if (reason === "login") {
         console.log("⚠️ 로그인이 필요합니다");
         await sendErrorAlert("로그인 세션이 만료되었습니다. npm run login 실행 필요.", { alertKey: "login" });
@@ -129,13 +120,14 @@ async function main() {
         console.log(`⚠️ 게시물 스크래핑 실패 (${reason || "unknown"})`);
       }
     } finally {
-      if (browser) {
-        const pages = await browser.pages();
-        await Promise.all(pages.map((p) => p.close()));
-        await browser.close();
-        console.log("\n🔒 브라우저 종료");
+      try {
+        if (browser) {
+          await closeBrowser(browser);
+          console.log("\n🔒 브라우저 종료");
+        }
+      } finally {
+        releaseBrowserProfileLock(lockFd);
       }
-      releaseBrowserProfileLock(lockFd);
     }
 
     console.log("\n🎉 모든 작업 완료!");
@@ -230,15 +222,20 @@ function checkMailForBandLinks() {
  */
 async function scrapePost(browser, url) {
   const page = await browser.newPage();
+  const dialogState = watchDialogs(page);
 
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
     await new Promise((resolve) => setTimeout(resolve, 3000));
 
-    // 로그인 페이지로 리다이렉트 되었는지 확인
-    if (page.url().includes("auth.band.us") || page.url().includes("/login")) {
+    // 로그인 만료 / 삭제된 게시물 확인
+    const state = await detectPageState(page, dialogState);
+    if (state === "login") {
       console.log("   ⚠️ 로그인 필요 - npm run login 실행 필요");
       return { post: null, reason: "login" };
+    }
+    if (state === "deleted") {
+      return { post: null, reason: "deleted" };
     }
 
     // 게시물 내용 추출
@@ -322,7 +319,7 @@ async function scrapePost(browser, url) {
     const reason = /timeout/i.test(error.message) ? "timeout" : "error";
     return { post: null, reason };
   } finally {
-    await page.close();
+    await page.close().catch(() => {});
   }
 }
 
@@ -440,6 +437,18 @@ function loadProcessedPosts() {
     // 파일이 없거나 파싱 에러
   }
   return [];
+}
+
+/**
+ * 게시물을 처리 완료로 기록
+ */
+function markProcessed(postId) {
+  if (!postId) return;
+  const posts = loadProcessedPosts();
+  if (!posts.includes(postId)) {
+    posts.push(postId);
+    saveProcessedPosts(posts);
+  }
 }
 
 /**

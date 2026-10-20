@@ -5,9 +5,9 @@
  * 예시: npm run send -- https://www.band.us/band/47113445/post/926902987
  */
 
-const puppeteer = require("puppeteer");
 const path = require("path");
 const { acquireBrowserProfileLock, releaseBrowserProfileLock } = require("./browser-lock");
+const { launchBrowser, watchDialogs, detectPageState, closeBrowser } = require("./browser-session");
 require("dotenv").config();
 
 const USER_DATA_DIR = path.join(__dirname, "..", ".browser-profile");
@@ -32,17 +32,20 @@ async function sendPost() {
   console.log("🌐 브라우저 시작...");
   let browser;
   try {
-    browser = await puppeteer.launch({
-      headless: "new",
-      userDataDir: USER_DATA_DIR,
-    });
+    browser = await launchBrowser(USER_DATA_DIR);
     const page = await browser.newPage();
+    const dialogState = watchDialogs(page);
     console.log(`📍 페이지 로딩: ${url}`);
     await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
     await new Promise((r) => setTimeout(r, 2000));
 
-    if (page.url().includes("auth.band.us") || page.url().includes("/login")) {
+    const state = await detectPageState(page, dialogState);
+    if (state === "login") {
       console.log("❌ 로그인 필요 - npm run login 먼저 실행하세요");
+      return;
+    }
+    if (state === "deleted") {
+      console.log("❌ 삭제되었거나 찾을 수 없는 게시물입니다");
       return;
     }
 
@@ -162,13 +165,14 @@ async function sendPost() {
   } catch (error) {
     console.error("❌ 에러:", error.message);
   } finally {
-    if (browser) {
-      const pages = await browser.pages();
-      await Promise.all(pages.map((p) => p.close()));
-      await browser.close();
-      console.log("🔒 브라우저 종료");
+    try {
+      if (browser) {
+        await closeBrowser(browser);
+        console.log("🔒 브라우저 종료");
+      }
+    } finally {
+      releaseBrowserProfileLock(lockFd);
     }
-    releaseBrowserProfileLock(lockFd);
   }
 }
 
