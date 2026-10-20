@@ -126,7 +126,7 @@ async function testMail() {
             console.log("\n✅ 메일 테스트 완료!");
             console.log("\n💡 다음 단계:");
             console.log("   1. 밴드 링크가 발견되면 연동 준비 완료");
-            console.log("   2. Vercel 배포 후 cron-job.org에서 주기적 호출 설정");
+            console.log("   2. crontab에서 npm run check(src/jobs/check-and-notify.js) 주기 실행");
             imap.end();
           });
         },

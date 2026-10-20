@@ -16,9 +16,6 @@ node_modules/
 # 에러 알림 쿨다운 상태
 .alert-state.json
 
-# Vercel
-.vercel
-
 # 로그
 logs/
 *.log

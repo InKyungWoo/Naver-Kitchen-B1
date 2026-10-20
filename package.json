@@ -2,7 +2,6 @@
   "name": "naver-kitchen-b1",
   "version": "1.0.0",
   "description": "네이버 밴드 → 슬랙 연동 (B1 Kitchen)",
-  "main": "index.js",
   "scripts": {
     "login": "node src/cli/login.js",
     "check": "node src/jobs/check-and-notify.js",
@@ -13,14 +12,10 @@
     "test-mail": "node tests/test-mail.js"
   },
   "dependencies": {
-    "@sparticuz/chromium": "^131.0.1",
+    "dotenv": "^16.4.7",
     "imap": "^0.8.19",
     "mailparser": "^3.7.1",
     "nodemailer": "^8.0.0",
-    "puppeteer-core": "^24.0.0"
-  },
-  "devDependencies": {
-    "dotenv": "^16.4.7",
     "puppeteer": "^24.0.0"
   },
   "engines": {

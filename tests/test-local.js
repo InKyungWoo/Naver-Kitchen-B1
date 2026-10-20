@@ -1,8 +1,8 @@
 /**
  * 로컬 테스트 스크립트
  *
- * Vercel 배포 전에 로컬에서 스크래핑/슬랙 전송을 테스트합니다.
- * cookies.json 파일이 필요합니다 (npm run login 먼저 실행).
+ * 로컬에서 스크래핑/슬랙 전송을 테스트합니다.
+ * 브라우저 프로필(.browser-profile/)이 필요합니다 (npm run login 먼저 실행).
  *
  * 사용법: npm run test-local
  */
